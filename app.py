@@ -4,17 +4,24 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+import plotly.express as px
+import json
 
-st.set_page_config(layout="wide", page_title="Resource Adequacy Visualizer")
+st.set_page_config(layout="wide", page_title="Resource Adequacy Visualization")
 
+# Load data
+draws_df = pd.read_csv("lole_draws.csv")
+map_df = pd.read_csv("lole_map_data.csv")
+
+with open("regions.geojson") as f:
+    geojson_data = json.load(f)
+
+# Style
 PRIMARY_COLOR = "#007A33"
-ACCENT_COLOR = "#00A9E0"
-BACKGROUND_COLOR = "#F7F9FB"
-
 st.markdown(f"""
     <style>
         .reportview-container {{
-            background-color: {BACKGROUND_COLOR};
+            background-color: #F7F9FB;
         }}
         .sidebar .sidebar-content {{
             background-color: white;
@@ -31,40 +38,45 @@ st.markdown(f"""
 
 st.title("Resource Adequacy Visualization Tool")
 
-df = pd.read_csv("lole_data.csv")
+# Draw selector
+draw = st.slider("Select Monte Carlo Draw", min_value=1, max_value=50, value=1)
 
-region = st.sidebar.selectbox("Select Region", sorted(df["Region"].unique()))
-case = st.sidebar.radio("Select Case", ["Base Case", "Change Case"])
+# Tabs
+tab1, tab2 = st.tabs(["📊 Heatmaps", "🗺️ LOLE Risk Map"])
 
-filtered = df[(df["Region"] == region) & (df["Case"] == case)].drop(columns=["Region", "Case"])
-months = filtered["Month"]
-heatmap_data = filtered.drop(columns=["Month"]).to_numpy()
+# --- Heatmaps ---
+with tab1:
+    st.subheader(f"LOLE Heatmaps – Change Case – Draw {draw}")
+    regions = draws_df["Region"].unique()
+    for region in sorted(regions):
+        data = draws_df[
+            (draws_df["Region"] == region) &
+            (draws_df["Draw"] == draw) &
+            (draws_df["Case"] == "Change Case")
+        ].pivot(index="Month", columns="Hour", values="LOLE")
 
-st.subheader(f"{region} – {case}")
-fig, ax = plt.subplots(figsize=(14, 6))
-sns.heatmap(heatmap_data, cmap="YlOrRd", xticklabels=filtered.columns[1:], yticklabels=months, ax=ax, cbar_kws={'label': 'LOLE (days)'})
-ax.set_xlabel("Hour of Day")
-ax.set_ylabel("Month")
-ax.set_title("LOLE Heatmap by Hour and Month")
-st.pyplot(fig)
+        st.markdown(f"**{region}**")
+        fig, ax = plt.subplots(figsize=(10, 4))
+        sns.heatmap(data, cmap="YlOrRd", ax=ax, cbar_kws={'label': 'LOLE (days)'})
+        st.pyplot(fig)
 
-st.subheader("Risk Duration Curve")
-threshold = 0.1
-draws = 50
-hours = 24
-months = 12
-values = []
+# --- Map View ---
+with tab2:
+    st.subheader(f"LOLE Risk Map – Draw {draw}")
+    draw_map = map_df[map_df["Draw"] == draw]
 
-for i in range(draws):
-    simulated = heatmap_data + 0.01 * np.random.randn(*heatmap_data.shape)
-    values.append((simulated > threshold).sum())
-
-values.sort(reverse=True)
-plt.figure(figsize=(10, 4))
-plt.plot(values, color=PRIMARY_COLOR)
-plt.xlabel("Draw Number (Sorted)")
-plt.ylabel("Hours > 0.1 LOLE")
-plt.title("Risk Duration Curve")
-st.pyplot(plt)
-
-st.info("Stacked resource sufficiency timeline coming soon.")
+    fig = px.choropleth_mapbox(
+        draw_map,
+        geojson=geojson_data,
+        locations="Region",
+        featureidkey="properties.Region",
+        color="LOLE",
+        color_continuous_scale="YlOrRd",
+        mapbox_style="carto-positron",
+        zoom=3,
+        center={"lat": 39.5, "lon": -98},
+        opacity=0.7,
+        labels={"LOLE": "Risk"},
+    )
+    fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+    st.plotly_chart(fig, use_container_width=True)
